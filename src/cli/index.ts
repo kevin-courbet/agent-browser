@@ -16,6 +16,7 @@ import {
 	defaultWindowsProfileDir,
 	launch,
 	looksLikeWsl,
+	stopAgentChrome,
 	stopWindowsForwarder,
 } from "./chrome-launcher.ts";
 import { windowsHostIp } from "../core/wsl.ts";
@@ -35,6 +36,36 @@ program
 
 function isJson(): boolean {
 	return Boolean(program.opts().json);
+}
+
+async function probeCdp(cdpUrl: string, timeoutMs = 3000): Promise<{ ok: boolean; detail: string }> {
+	try {
+		const res = await fetch(`${cdpUrl}/json/version`, {
+			signal: AbortSignal.timeout(timeoutMs),
+		});
+		if (!res.ok) return { ok: false, detail: `http ${res.status}` };
+		const body = (await res.json()) as { Browser?: string };
+		return { ok: true, detail: body.Browser ?? "unknown" };
+	} catch (err) {
+		return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+	}
+}
+
+async function waitForCdp(cdpUrl: string): Promise<void> {
+	for (let i = 0; i < 30; i++) {
+		const probe = await probeCdp(cdpUrl, 1000);
+		if (probe.ok) return;
+		await new Promise((resolve) => setTimeout(resolve, 250));
+	}
+	throw new Error(`CDP did not become reachable at ${cdpUrl}`);
+}
+
+function attachRecoveryHint(err: unknown): Error {
+	const message = err instanceof Error ? err.message : String(err);
+	const hint = looksLikeWsl()
+		? "\n\nRecovery: run `ab attach --repair` to restart the isolated Chrome + WSL forwarder, or `ab chrome --url <url> && ab attach`."
+		: "\n\nRecovery: run `ab chrome --url <url> && ab attach`, or retry with `ab attach --repair`.";
+	return new Error(`${message}${hint}`);
 }
 
 // ---------- daemon lifecycle ----------
@@ -192,21 +223,7 @@ program
 	.description("kill the agent-browser Chrome instance + Windows forwarder (does not touch user Chrome)")
 	.action(() => {
 		try {
-			stopWindowsForwarder();
-			if (looksLikeWsl()) {
-				// Kill only Chrome processes whose command line references our profile.
-				const script = [
-					"Get-CimInstance Win32_Process -Filter \"name='chrome.exe'\"",
-					"Where-Object { $_.CommandLine -like '*agent-browser*chrome-profile*' }",
-					"ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
-				].join(" | ");
-				try {
-					require("node:child_process").execSync(
-						`powershell.exe -NoProfile -Command "${script}"`,
-						{ stdio: "ignore", timeout: 10_000 },
-					);
-				} catch {}
-			}
+			stopAgentChrome();
 			process.stderr.write("chrome-stop: done\n");
 		} catch (err) {
 			fail(err);
@@ -263,6 +280,8 @@ program
 	.command("attach")
 	.description("attach the daemon to a running Chrome over CDP")
 	.option("--url <url>", "CDP URL (default: http://127.0.0.1:9222 or $AGENT_BROWSER_CDP_URL)")
+	.option("--repair", "restart isolated Chrome/forwarder and retry if attach fails")
+	.option("--open-url <url>", "URL to open when used with --repair")
 	.action(async (opts) => {
 		try {
 			const data = await send("attach", { debugUrl: opts.url });
@@ -271,7 +290,30 @@ program
 				return `attached: ${d.cdpUrl}  pages=${d.pages}`;
 			});
 		} catch (err) {
-			fail(err);
+			if (!opts.repair) fail(attachRecoveryHint(err));
+			if (opts.url) {
+				fail(new Error("--repair only supports the default isolated agent-browser Chrome, not a custom --url"));
+			}
+
+			try {
+				stopAgentChrome();
+				const port = defaultPort();
+				const mode = looksLikeWsl() ? "wsl-windows" : "native";
+				const result = launch({
+					port,
+					startUrl: opts.openUrl,
+					mode,
+				});
+				persistCdpUrl(result.cdpUrl);
+				await waitForCdp(result.cdpUrl);
+				const data = await send("attach", { debugUrl: result.cdpUrl });
+				emit(isJson() ? "json" : "text", data, () => {
+					const d = data as { pages: number; cdpUrl: string };
+					return `repaired Chrome/forwarder\nattached: ${d.cdpUrl}  pages=${d.pages}`;
+				});
+			} catch (repairErr) {
+				fail(new Error(`attach failed, and --repair failed: ${repairErr instanceof Error ? repairErr.message : String(repairErr)}`));
+			}
 		}
 	});
 

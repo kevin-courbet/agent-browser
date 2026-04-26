@@ -339,5 +339,25 @@ export function stopWindowsForwarder(): void {
 	} catch {}
 }
 
+export function stopAgentChrome(): void {
+	stopWindowsForwarder();
+	if (!looksLikeWsl()) return;
+
+	const script = [
+		"Get-CimInstance Win32_Process -Filter \"name='chrome.exe'\"",
+		"Where-Object { $_.CommandLine -like '*agent-browser*chrome-profile*' }",
+		"ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+	].join(" | ");
+
+	try {
+		execSync(`powershell.exe -NoProfile -Command "${script}"`, {
+			stdio: "ignore",
+			timeout: 10_000,
+		});
+	} catch {
+		// ignore — Chrome may already be gone
+	}
+}
+
 // Silence unused warnings
 void os;
