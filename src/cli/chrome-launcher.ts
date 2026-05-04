@@ -179,12 +179,13 @@ export function launch(opts: LaunchOptions): LaunchResult {
 
 		// Launch the Windows-side TCP forwarder so WSL can reach CDP.
 		const forwarderPort = opts.forwarderPort ?? opts.port + 1;
+		const host = windowsHostIp() ?? "127.0.0.1";
 		const forwarderPid = startWindowsForwarder({
+			listenAddress: host,
 			listenPort: forwarderPort,
 			targetPort: opts.port,
 		});
 
-		const host = windowsHostIp() ?? "127.0.0.1";
 		return {
 			mode: "wsl-windows",
 			pid: undefined,
@@ -276,6 +277,7 @@ export function looksLikeWsl(): boolean {
  * Idempotent — kills any previous forwarder first.
  */
 export function startWindowsForwarder(opts: {
+	listenAddress: string;
 	listenPort: number;
 	targetPort: number;
 }): number | null {
@@ -299,7 +301,7 @@ export function startWindowsForwarder(opts: {
 		fs.unlinkSync(pidFileWsl);
 	} catch {}
 
-	const psCmd = `Start-Process -WindowStyle Hidden -FilePath 'powershell.exe' -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','${psScriptWin.replace(/'/g, "''")}','-ListenPort','${opts.listenPort}','-TargetPort','${opts.targetPort}','-PidFile','${pidFileWin.replace(/'/g, "''")}'`;
+	const psCmd = `Start-Process -WindowStyle Hidden -FilePath 'powershell.exe' -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','${psScriptWin.replace(/'/g, "''")}','-ListenAddress','${opts.listenAddress.replace(/'/g, "''")}','-ListenPort','${opts.listenPort}','-TargetPort','${opts.targetPort}','-PidFile','${pidFileWin.replace(/'/g, "''")}'`;
 	const child = spawn("powershell.exe", ["-NoProfile", "-Command", psCmd], {
 		stdio: "ignore",
 		detached: true,

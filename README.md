@@ -44,20 +44,25 @@ whole extension model by speaking CDP directly.
 ## Install
 
 ```sh
-cd ~/dev/agent-browser
+git clone https://github.com/kevin-courbet/agent-browser.git
+cd agent-browser
 bun install
 ```
 
 Node 22+ is required for the daemon. The CLI auto-spawns the daemon on first
 use.
 
+The CLI runs on Bun for fast startup. The daemon runs on Node because
+Playwright CDP attach currently times out under Bun in the WSL-to-Windows Chrome
+path.
+
 ## Usage
 
 ### WSL2 → Windows Chrome (the common case in this setup)
 
 ```sh
-# Launch Chrome on the Windows host (via powershell.exe) + a userspace TCP
-# forwarder so WSL can reach Chrome's loopback CDP endpoint.
+# Launch Chrome on the Windows host (via powershell.exe) + a Windows-side TCP
+# forwarder bound to the WSL-reachable host address.
 bun src/cli/index.ts chrome --url https://example.com
 
 # Sanity check
@@ -85,12 +90,16 @@ reach Windows loopback. `ab chrome` solves this by:
 
 1. Launching Chrome on Windows, CDP on `127.0.0.1:9222`.
 2. Starting a tiny in-process C# TCP forwarder (via PowerShell `Add-Type`)
-   that listens on `0.0.0.0:9223` and relays to `127.0.0.1:9222`.
+   that listens on the Windows host address reachable from WSL and relays to
+   `127.0.0.1:9222`.
 3. Returning the CDP URL `http://<wsl-gateway-ip>:9223` for the daemon.
 
 Everything is isolated to the dedicated profile at
 `%LOCALAPPDATA%\agent-browser\chrome-profile` — your real Chrome session is
 untouched.
+
+CDP gives full control over the isolated browser profile. Do not expose the CDP
+or forwarder ports to untrusted networks; run `ab chrome-stop` when done.
 
 ### Native (Linux / macOS)
 
@@ -146,8 +155,8 @@ Add `--json` to any command for machine-readable output.
 The whole surface is just the `ab` binary and stdout. No harness-specific
 glue required — any agent that can run shell commands can drive it.
 
-- **opencode / Claude Code / Cursor**: just invoke `ab <cmd>` via their Bash
-  tool. Redirect PNGs to a file and then read them.
+- **Coding-agent CLIs**: invoke `ab <cmd>` through the shell tool. Redirect PNGs
+  to a file and then read them.
 - **LangGraph / your own loop**: shell out to `ab --json <cmd>`, parse the
   JSON response.
 
