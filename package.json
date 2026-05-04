@@ -1,5 +1,5 @@
 {
-  "name": "agent-browser",
+  "name": "@kevin-courbet/agent-browser",
   "version": "0.1.0",
   "description": "CLI-driven browser control for coding agents using Playwright over CDP.",
   "license": "MIT",

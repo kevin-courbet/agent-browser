@@ -44,6 +44,9 @@ whole extension model by speaking CDP directly.
 ## Install
 
 ```sh
+npm install -g @kevin-courbet/agent-browser
+
+# Or from source:
 git clone https://github.com/kevin-courbet/agent-browser.git
 cd agent-browser
 bun install
