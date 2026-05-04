@@ -36,6 +36,7 @@ export const NavigateArgs = z.object({
 		.enum(["load", "domcontentloaded", "networkidle", "commit"])
 		.default("load"),
 });
+export const OpenArgs = NavigateArgs;
 export const SnapshotArgs = z.object({
 	fullPage: z.boolean().default(false),
 });

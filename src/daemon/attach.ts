@@ -3,6 +3,8 @@ import { getDefaultCdpUrl } from "../core/paths.ts";
 import type { DaemonState } from "./state.ts";
 import type { ConsoleEntry, NetworkEntry } from "../core/protocol.ts";
 
+const wiredPages = new WeakSet<Page>();
+
 /**
  * CDP attach with observability wiring.
  *
@@ -68,7 +70,11 @@ export async function detach(state: DaemonState): Promise<void> {
 	state.activePage = null;
 }
 
-function wirePage(state: DaemonState, page: Page): void {
+
+export function wirePage(state: DaemonState, page: Page): void {
+	if (wiredPages.has(page)) return;
+	wiredPages.add(page);
+
 	const obs = state.ensureObservability(page);
 
 	page.on("console", (msg) => {

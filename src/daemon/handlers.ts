@@ -6,6 +6,7 @@ import {
 	BufferArgs,
 	EvalArgs,
 	NavigateArgs,
+	OpenArgs,
 	PressArgs,
 	RefArgs,
 	ScreenshotArgs,
@@ -21,7 +22,7 @@ import {
 	type TabInfo,
 } from "../core/protocol.ts";
 import { PAGE_SNAPSHOT_SOURCE } from "../core/snapshot-page.ts";
-import { attach, detach, ensureAttached, listPages } from "./attach.ts";
+import { attach, detach, ensureAttached, listPages, wirePage } from "./attach.ts";
 import type { DaemonState } from "./state.ts";
 
 type Handler<I, O> = (state: DaemonState, args: I) => Promise<O>;
@@ -122,6 +123,24 @@ const navigate: Handler<z.infer<typeof NavigateArgs>, { url: string; status: num
 		});
 		return { url: page.url(), status: resp?.status() ?? null };
 	};
+
+const open: Handler<z.infer<typeof OpenArgs>, { url: string; status: number | null }> = async (
+	state,
+	args,
+) => {
+	const parsed = OpenArgs.parse(args);
+	await ensureAttached(state);
+	const context = state.session?.contexts[0];
+	if (!context) throw new Error("No browser context available.");
+	const page = await context.newPage();
+	wirePage(state, page);
+	state.activePage = page;
+	const resp = await page.goto(parsed.url, {
+		waitUntil: parsed.waitUntil,
+		timeout: 30_000,
+	});
+	return { url: page.url(), status: resp?.status() ?? null };
+};
 
 const back: Handler<void, { url: string }> = async (state) => {
 	const page = requirePage(state);
@@ -295,6 +314,7 @@ export const handlers = {
 	detach: detachCmd,
 	tabs,
 	tab,
+	open,
 	navigate,
 	back,
 	forward,

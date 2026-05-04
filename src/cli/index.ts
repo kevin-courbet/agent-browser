@@ -160,7 +160,7 @@ program
 	.option("--url <url>", "open this URL after launch")
 	.option("--native", "force native launch (bypass WSL-Windows bridging)")
 	.option("--print", "print the command instead of launching")
-	.action((opts) => {
+	.action(async (opts) => {
 		try {
 			const wsl = looksLikeWsl() && !opts.native;
 			const mode = opts.print ? "print" : wsl ? "wsl-windows" : "native";
@@ -168,13 +168,22 @@ program
 				chromePath: opts.chrome,
 				port: parseInt(opts.port, 10),
 				profileDir: opts.profile,
-				startUrl: opts.url,
+				startUrl: mode === "print" ? opts.url : undefined,
 				mode,
 			});
 			if (mode !== "print") {
 				// Persist so later `attach`/`doctor` default to the right URL
 				// (this matters on WSL where the forwarder is on a different port).
 				persistCdpUrl(result.cdpUrl);
+				await waitForCdp(result.cdpUrl);
+				const attached = (await send("attach", { debugUrl: result.cdpUrl })) as {
+					pages: number;
+					cdpUrl: string;
+				};
+				if (opts.url) {
+					await send("open", { url: opts.url, waitUntil: "load" });
+				}
+				(result as LaunchResultWithAttach).attachedPages = attached.pages;
 			}
 			if (mode === "print") {
 				process.stdout.write(`${result.command}\n`);
@@ -182,6 +191,7 @@ program
 					`\ncdp url (use for attach): ${result.cdpUrl}\nprofile: ${result.profileDir}\n`,
 				);
 			} else {
+				const attachedPages = (result as LaunchResultWithAttach).attachedPages;
 				process.stderr.write(
 					[
 						`launched chrome via ${mode}`,
@@ -191,6 +201,8 @@ program
 							: "",
 						`cdp url: ${result.cdpUrl}`,
 						`profile: ${result.profileDir}`,
+						attachedPages === undefined ? "" : `attached: pages=${attachedPages}`,
+						opts.url ? `opened: ${opts.url}` : "",
 					]
 						.filter(Boolean)
 						.join("\n") + "\n",
@@ -200,6 +212,8 @@ program
 			fail(err);
 		}
 	});
+
+type LaunchResultWithAttach = ReturnType<typeof launch> & { attachedPages?: number };
 
 program
 	.command("chrome-args")
@@ -361,6 +375,26 @@ program
 	});
 
 // ---------- navigation ----------
+
+program
+	.command("open <url>")
+	.description("open a fresh observed tab and navigate to URL")
+	.option(
+		"--wait-until <state>",
+		"load | domcontentloaded | networkidle | commit",
+		"load",
+	)
+	.action(async (url, opts) => {
+		try {
+			const data = await send("open", { url, waitUntil: opts.waitUntil });
+			emit(isJson() ? "json" : "text", data, () => {
+				const d = data as { url: string; status: number | null };
+				return `opened: ${d.url}  [status=${d.status ?? "n/a"}]`;
+			});
+		} catch (err) {
+			fail(err);
+		}
+	});
 
 program
 	.command("navigate <url>")

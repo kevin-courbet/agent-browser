@@ -125,6 +125,7 @@ Run `bun src/cli/index.ts <command> --help` for every command. Summary:
 | `attach [--url]` | Connect the daemon to a running Chrome |
 | `detach` | Disconnect |
 | `tabs` / `tab -i N \| -u substr` | List / switch tabs |
+| `open <url>` | Open a fresh observed tab |
 | `navigate <url>` / `back` / `forward` | History |
 | `snapshot` | ARIA tree with refs |
 | `click <ref>` | Click element by ref |
@@ -175,6 +176,8 @@ Browser control is available via `ab`:
   `e42` in a past snapshot may be a different element now.
 - The daemon does not yet wire a `requestresponse` network tap for bodies.
   It captures method/URL/status/timing/failure only.
+- `chrome --url` auto-attaches first and opens the URL through the daemon so
+  initial console, network, and pageerror events are buffered.
 - No file upload helper yet (`setInputFiles`). Use `eval` with a `DataTransfer`
   workaround for now.
 - Screenshot to stdout writes raw PNG bytes — pipe or `--out` only.
