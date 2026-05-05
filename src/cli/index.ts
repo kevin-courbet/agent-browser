@@ -105,6 +105,7 @@ async function handleChrome(args: string[]): Promise<void> {
 		chromePath: opts.values.get("chrome"),
 		port,
 		profileDir: opts.values.get("profile"),
+		startUrl: mode === "print" ? opts.values.get("url") : "about:blank",
 		mode,
 	});
 
