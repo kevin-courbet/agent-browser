@@ -47,11 +47,12 @@ In source checkout, use `bun run cli -- <command>` instead of `ab <command>`.
 2. Enables Chrome DevTools Protocol on Windows loopback, normally `127.0.0.1:9222`.
 3. Starts a tiny Windows-side TCP forwarder reachable from WSL, normally `http://<windows-host-ip>:9223`.
 4. Runs `agent-browser connect <cdp-url>`.
-5. Runs `agent-browser open <url>` when `--url` is passed.
 
-Chrome is launched on `about:blank` before connecting so upstream
-`agent-browser` never attaches to `chrome://newtab`, which can time out on
-`Page.enable` under WSL forwarding.
+When `--url` is passed, Chrome starts directly on that URL so upstream
+`agent-browser` attaches to the requested page without creating an extra blank
+tab. The wrapper also closes restored/stale page targets before connecting.
+Without `--url`, Chrome starts on `about:blank` so upstream never attaches to
+`chrome://newtab`, which can time out on `Page.enable` under WSL forwarding.
 
 Everything after that delegates to upstream `agent-browser` unchanged.
 

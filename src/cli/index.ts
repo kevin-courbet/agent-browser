@@ -101,11 +101,12 @@ async function handleChrome(args: string[]): Promise<void> {
 	const port = parsePort(opts.values.get("port") ?? String(defaultPort()));
 	const wsl = looksLikeWsl() && !opts.flags.has("native");
 	const mode = opts.flags.has("print") ? "print" : wsl ? "wsl-windows" : "native";
+	const url = opts.values.get("url");
 	const result = launch({
 		chromePath: opts.values.get("chrome"),
 		port,
 		profileDir: opts.values.get("profile"),
-		startUrl: mode === "print" ? opts.values.get("url") : "about:blank",
+		startUrl: url ?? "about:blank",
 		mode,
 	});
 
@@ -117,12 +118,8 @@ async function handleChrome(args: string[]): Promise<void> {
 
 	persistCdpUrl(result.cdpUrl);
 	await waitForCdp(result.cdpUrl);
+	await prunePageTargets(result.cdpUrl, url);
 	await runAgentBrowser(["connect", result.cdpUrl]);
-
-	const url = opts.values.get("url");
-	if (url) {
-		await runAgentBrowser(["open", url]);
-	}
 
 	process.stderr.write(
 		[
@@ -178,6 +175,62 @@ async function waitForCdp(cdpUrl: string): Promise<void> {
 		await new Promise((resolve) => setTimeout(resolve, 250));
 	}
 	throw new Error(`CDP did not become reachable at ${cdpUrl}`);
+}
+
+type CdpTarget = {
+	id?: string;
+	type?: string;
+	url?: string;
+};
+
+async function prunePageTargets(cdpUrl: string, preferredUrl: string | undefined): Promise<void> {
+	const pages = await waitForPageTargets(cdpUrl, preferredUrl);
+	if (pages.length <= 1) return;
+
+	const keep = choosePageToKeep(pages, preferredUrl);
+	await Promise.all(
+		pages
+			.filter((page) => page.id && page.id !== keep.id)
+			.map((page) => closePageTarget(cdpUrl, page.id!)),
+	);
+}
+
+async function waitForPageTargets(cdpUrl: string, preferredUrl: string | undefined): Promise<CdpTarget[]> {
+	let lastPages: CdpTarget[] = [];
+	for (let i = 0; i < 20; i++) {
+		const pages = await listPageTargets(cdpUrl);
+		lastPages = pages;
+		if (preferredUrl ? pages.some((page) => page.url === preferredUrl) : pages.length > 0) {
+			return pages;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+	return lastPages;
+}
+
+async function listPageTargets(cdpUrl: string): Promise<CdpTarget[]> {
+	const res = await fetch(`${cdpUrl}/json/list`, {
+		signal: AbortSignal.timeout(3000),
+	});
+	if (!res.ok) throw new Error(`failed to list CDP targets: HTTP ${res.status}`);
+	const targets = (await res.json()) as CdpTarget[];
+	return targets.filter((target) => target.type === "page" && target.id);
+}
+
+function choosePageToKeep(pages: CdpTarget[], preferredUrl: string | undefined): CdpTarget {
+	if (preferredUrl) {
+		return pages.find((page) => page.url === preferredUrl) ?? pages[0]!;
+	}
+	return pages.find((page) => page.url === "about:blank") ?? pages[0]!;
+}
+
+async function closePageTarget(cdpUrl: string, targetId: string): Promise<void> {
+	const res = await fetch(`${cdpUrl}/json/close/${encodeURIComponent(targetId)}`, {
+		signal: AbortSignal.timeout(3000),
+	});
+	if (!res.ok && res.status !== 404) {
+		throw new Error(`failed to close CDP target ${targetId}: HTTP ${res.status}`);
+	}
 }
 
 async function probeCdp(cdpUrl: string, timeoutMs: number): Promise<{ ok: boolean; detail: string }> {
