@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import fs from "node:fs";
 
 /**
@@ -25,6 +25,8 @@ export function isWsl(): boolean {
 }
 
 let cachedHostIp: string | null | undefined;
+let cachedGuestIp: string | null | undefined;
+let cachedMirroredNetworking: boolean | undefined;
 
 /**
  * Windows host IP as reachable from WSL2.
@@ -56,6 +58,73 @@ export function windowsHostIp(): string | null {
 		// fallthrough
 	}
 	return (cachedHostIp = null);
+}
+
+/** WSL guest address that Windows can use to reach services bound to all interfaces. */
+export function wslGuestIp(): string | null {
+	if (cachedGuestIp !== undefined) return cachedGuestIp;
+	const host = windowsHostIp();
+	if (!host) return (cachedGuestIp = null);
+	try {
+		const out = execFileSync("ip", ["-4", "route", "get", host], {
+			encoding: "utf8",
+			timeout: 2000,
+		});
+		const match = out.match(/\bsrc\s+(\d+\.\d+\.\d+\.\d+)\b/);
+		if (match?.[1]) return (cachedGuestIp = match[1]);
+	} catch {
+		// fall through
+	}
+	return (cachedGuestIp = null);
+}
+
+export function hasMirroredNetworking(): boolean {
+	if (cachedMirroredNetworking !== undefined) return cachedMirroredNetworking;
+	if (!isWsl()) return (cachedMirroredNetworking = false);
+	try {
+		const mode = execFileSync("wslinfo", ["--networking-mode"], {
+			encoding: "utf8",
+			timeout: 2000,
+		}).trim();
+		return (cachedMirroredNetworking = mode === "mirrored");
+	} catch {
+		return (cachedMirroredNetworking = false);
+	}
+}
+
+export type LoopbackUrl = {
+	url: string;
+	listenAddress: string;
+	port: number;
+};
+
+/** Parse loopback HTTP(S) URLs that need a Windows-to-WSL forwarder. */
+export function parseLoopbackUrl(rawUrl: string): LoopbackUrl | null {
+	const explicitHttpUrl = /^https?:\/\//i.test(rawUrl);
+	const malformedHttpUrl = /^https?:/i.test(rawUrl) && !explicitHttpUrl;
+	if (malformedHttpUrl) throw new Error(`invalid HTTP(S) URL: ${rawUrl}`);
+	const bareLoopbackUrl = /^(?:localhost\.?|127(?:\.\d{1,3}){3}|\[::1\])(?=[:/?#]|$)/i.test(rawUrl);
+	if (!explicitHttpUrl && !bareLoopbackUrl) return null;
+
+	let url: URL;
+	try {
+		url = new URL(explicitHttpUrl ? rawUrl : `http://${rawUrl}`);
+	} catch (cause) {
+		throw new Error(`invalid HTTP(S) URL: ${rawUrl}`, { cause });
+	}
+	const hostname = url.hostname.toLowerCase().replace(/\.$/, "");
+	const ipv4 = hostname.match(/^127\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+	const ipv4Loopback = ipv4?.slice(1).every((part) => Number(part) <= 255) ?? false;
+	if (hostname !== "localhost" && hostname !== "[::1]" && !ipv4Loopback) {
+		return null;
+	}
+
+	const port = url.port ? Number(url.port) : url.protocol === "https:" ? 443 : 80;
+	if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+		throw new Error(`invalid URL port: ${rawUrl}`);
+	}
+	const listenAddress = hostname === "[::1]" ? "::1" : ipv4Loopback ? hostname : "127.0.0.1";
+	return { url: explicitHttpUrl ? rawUrl : `http://${rawUrl}`, listenAddress, port };
 }
 
 /**
