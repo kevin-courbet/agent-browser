@@ -1,4 +1,4 @@
-# agent-browser TCP forwarder
+# agent-browser WSL->Windows CDP forwarder
 #
 # Chrome on Windows silently refuses `--remote-debugging-address=0.0.0.0` for
 # security reasons, so CDP only listens on 127.0.0.1 — unreachable from the
@@ -13,19 +13,14 @@
 # Args:
 #   -ListenAddress address to listen on. default 127.0.0.1
 #   -ListenPort    port to listen on. default 9223
-#   -TargetAddress target address. default 127.0.0.1
-#   -TargetPort    target port. default 9222
+#   -TargetPort    port to forward to (127.0.0.1:<port>). default 9222
 #   -PidFile       path to write the pid into so the launcher can stop us later
 param(
     [string]$ListenAddress = '127.0.0.1',
     [int]$ListenPort = 9223,
-    [string]$TargetAddress = '127.0.0.1',
     [int]$TargetPort = 9222,
-    [string]$PidFile = '',
-    [string]$InstanceId = ''
+    [string]$PidFile = ''
 )
-
-Set-Location -LiteralPath $env:WINDIR
 
 if ($PidFile) {
     $PID | Out-File -FilePath $PidFile -Encoding ascii -Force
@@ -69,5 +64,5 @@ public static class AbForwarder {
 }
 "@
 
-Write-Host "agent-browser forwarder listening on ${ListenAddress}:$ListenPort -> ${TargetAddress}:$TargetPort"
-[AbForwarder]::Run($ListenAddress, $ListenPort, $TargetAddress, $TargetPort)
+Write-Host "agent-browser forwarder listening on ${ListenAddress}:$ListenPort -> 127.0.0.1:$TargetPort"
+[AbForwarder]::Run($ListenAddress, $ListenPort, '127.0.0.1', $TargetPort)

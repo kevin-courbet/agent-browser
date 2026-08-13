@@ -48,12 +48,6 @@ In source checkout, use `bun run cli -- <command>` instead of `ab <command>`.
 3. Starts a tiny Windows-side TCP forwarder reachable from WSL, normally `http://<windows-host-ip>:9223`.
 4. Runs `agent-browser connect <cdp-url>`.
 
-`ab open`, `ab goto`, and `ab navigate` also start this bridge when it is not
-running. For a loopback URL such as `http://localhost:6006`, the wrapper starts
-a managed Windows loopback forwarder to the same port on the WSL guest. The
-browser URL and origin remain `localhost`. The WSL service must listen on its
-guest interface, usually by binding to `0.0.0.0`.
-
 When `--url` is passed, Chrome starts directly on that URL so upstream
 `agent-browser` attaches to the requested page without creating an extra blank
 tab. The wrapper also closes restored/stale page targets before connecting.
