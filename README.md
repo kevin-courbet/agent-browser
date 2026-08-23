@@ -31,6 +31,7 @@ Bun is required for the `ab` wrapper. Node is used by the upstream
 
 ```sh
 ab chrome --url https://example.com
+ab chrome --url https://private.example.internal --profile 'C:\path\to\profile' --proxy-pac-url 'data:application/x-ns-proxy-autoconfig,...'
 ab snapshot
 ab click @e2
 ab errors --json
@@ -63,7 +64,8 @@ Wrapper-owned commands:
 | Command | Purpose |
 | --- | --- |
 | `ab chrome [--url <url>]` | Launch isolated Chrome, bridge CDP into WSL, connect upstream agent-browser |
-| `ab chrome-stop` | Stop wrapper-launched Chrome and the Windows forwarder |
+| `--proxy-pac-url <url>` | Add a scoped PAC URL to a `chrome` or `chrome-args` launch |
+| `ab chrome-stop [--profile <dir>]` | Stop wrapper-launched Chrome for the selected profile and stop the Windows forwarder |
 | `ab chrome-args` | Print Chrome flags used by the launcher |
 | `ab doctor` | Show WSL, CDP reachability, and delegated package version |
 | `ab attach [--url <cdp-url>]` | Compatibility alias for `agent-browser connect` |

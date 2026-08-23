@@ -1,4 +1,4 @@
-import { execSync, spawn } from "node:child_process";
+import { execFileSync, execSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -49,6 +49,8 @@ export interface LaunchOptions {
 	 * Windows (via WSL) → `%LOCALAPPDATA%\agent-browser\chrome-profile`.
 	 */
 	profileDir?: string | undefined;
+	/** Optional Chrome PAC URL for a scoped browser proxy. */
+	proxyPacUrl?: string | undefined;
 	mode: LaunchMode;
 	/** Bind CDP to 0.0.0.0 instead of 127.0.0.1 — ignored for wsl-windows (Chrome rejects it). */
 	bindAll?: boolean | undefined;
@@ -70,6 +72,7 @@ export interface LaunchResult {
 }
 
 const FORWARDER_PID_PATH = path.join(paths.runtimeDir, "windows-forwarder.pid");
+const WINDOWS_PROFILE_PATH = path.join(paths.runtimeDir, "windows-chrome-profile");
 
 export function resolveLinuxChromePath(hint?: string): string {
 	if (hint) {
@@ -111,6 +114,7 @@ export function buildChromeArgs(opts: {
 	profileDir: string;
 	startUrl?: string | undefined;
 	bindAll?: boolean | undefined;
+	proxyPacUrl?: string | undefined;
 }): string[] {
 	const args = [
 		`--remote-debugging-port=${opts.port}`,
@@ -123,6 +127,7 @@ export function buildChromeArgs(opts: {
 	if (opts.bindAll) {
 		args.push("--remote-debugging-address=0.0.0.0");
 	}
+	if (opts.proxyPacUrl) args.push(`--proxy-pac-url=${opts.proxyPacUrl}`);
 	if (opts.startUrl) args.push(opts.startUrl);
 	return args;
 }
@@ -150,12 +155,32 @@ export function defaultWindowsProfileDir(): string {
 	return `C:\\Users\\${user}\\AppData\\Local\\agent-browser\\chrome-profile`;
 }
 
+function quoteWindowsArgument(argument: string): string {
+	let quoted = '"';
+	let backslashes = 0;
+	for (const character of argument) {
+		if (character === "\\") {
+			backslashes += 1;
+			continue;
+		}
+		if (character === '"') {
+			quoted += "\\".repeat(backslashes * 2 + 1) + '"';
+			backslashes = 0;
+			continue;
+		}
+		quoted += "\\".repeat(backslashes) + character;
+		backslashes = 0;
+	}
+	return quoted + "\\".repeat(backslashes * 2) + '"';
+}
+
 export function launch(opts: LaunchOptions): LaunchResult {
 	const bindAll = opts.bindAll ?? false;
 
 	if (opts.mode === "wsl-windows") {
 		fs.mkdirSync(paths.runtimeDir, { recursive: true });
 		const profileDir = opts.profileDir ?? defaultWindowsProfileDir();
+		fs.writeFileSync(WINDOWS_PROFILE_PATH, profileDir, { mode: 0o600 });
 		const chromePath = resolveWindowsChromePath(opts.chromePath);
 		// Chrome silently rejects --remote-debugging-address=0.0.0.0; leave it
 		// bound to 127.0.0.1 and use a userspace forwarder instead.
@@ -164,10 +189,11 @@ export function launch(opts: LaunchOptions): LaunchResult {
 			profileDir,
 			startUrl: opts.startUrl,
 			bindAll: false,
+			proxyPacUrl: opts.proxyPacUrl,
 		});
-		const psArgs = args.map((a) => `'${a.replace(/'/g, "''")}'`).join(", ");
+		const psArgs = args.map((a) => `'${quoteWindowsArgument(a).replace(/'/g, "''")}'`).join(", ");
 		const psCmd = `Start-Process -FilePath '${chromePath.replace(/'/g, "''")}' -ArgumentList ${psArgs}`;
-		const fullCmd = `powershell.exe -NoProfile -Command "${psCmd}"`;
+		const fullCmd = `powershell.exe -NoProfile -Command ${shellQuote(psCmd)}`;
 
 		// Launch Chrome on Windows.
 		const child = spawn(
@@ -207,15 +233,16 @@ export function launch(opts: LaunchOptions): LaunchResult {
 				profileDir,
 				startUrl: opts.startUrl,
 				bindAll: true,
+				proxyPacUrl: opts.proxyPacUrl,
 			});
 			const psArgs = args
-				.map((a) => `'${a.replace(/'/g, "''")}'`)
+				.map((a) => `'${quoteWindowsArgument(a).replace(/'/g, "''")}'`)
 				.join(", ");
 			const psCmd = `Start-Process -FilePath '${chromePath.replace(/'/g, "''")}' -ArgumentList ${psArgs}`;
 			const host = windowsHostIp() ?? "127.0.0.1";
 			return {
 				mode: "print",
-				command: `powershell.exe -NoProfile -Command "${psCmd}"`,
+				command: `powershell.exe -NoProfile -Command ${shellQuote(psCmd)}`,
 				cdpUrl: `http://${host}:${opts.port}`,
 				profileDir,
 			};
@@ -245,6 +272,7 @@ export function launch(opts: LaunchOptions): LaunchResult {
 		profileDir,
 		startUrl: opts.startUrl,
 		bindAll,
+		proxyPacUrl: opts.proxyPacUrl,
 	});
 	const child = spawn(chromePath, args, { stdio: "ignore", detached: true });
 	child.unref();
@@ -341,23 +369,36 @@ export function stopWindowsForwarder(): void {
 	} catch {}
 }
 
-export function stopAgentChrome(): void {
+export function stopAgentChrome(profileHint?: string): void {
 	stopWindowsForwarder();
 	if (!looksLikeWsl()) return;
 
-	const script = [
+	let persistedProfile: string | undefined;
+	try {
+		persistedProfile = fs.readFileSync(WINDOWS_PROFILE_PATH, "utf8").trim() || undefined;
+	} catch {
+		// Use the selected or default profile when no wrapper launch was recorded.
+	}
+	const profileDir = profileHint ?? persistedProfile ?? defaultWindowsProfileDir();
+	const escapedProfile = profileDir.replace(/'/g, "''");
+	const processQuery = [
 		"Get-CimInstance Win32_Process -Filter \"name='chrome.exe'\"",
-		"Where-Object { $_.CommandLine -like '*agent-browser*chrome-profile*' }",
-		"ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+		"Where-Object { $_.CommandLine -and [regex]::IsMatch($_.CommandLine, $pattern) }",
 	].join(" | ");
+	const script = `$profile = '${escapedProfile}'; $argument = '--user-data-dir=' + $profile; $pattern = '(?:^|\\s)"?' + [regex]::Escape($argument) + '"?(?=\\s|$)'; $matchingProcesses = @(${processQuery}); $matchingProcesses | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; Start-Sleep -Milliseconds 100; $remainingProcesses = @(${processQuery}); if ($remainingProcesses.Count -gt 0) { throw 'Chrome profile did not stop.' }`;
 
 	try {
-		execSync(`powershell.exe -NoProfile -Command "${script}"`, {
+		execFileSync("powershell.exe", ["-NoProfile", "-Command", script], {
 			stdio: "ignore",
 			timeout: 10_000,
 		});
-	} catch {
-		// ignore — Chrome may already be gone
+	} catch (error) {
+		throw new Error(`failed to stop Chrome profile: ${profileDir}`, { cause: error });
+	}
+	if (!persistedProfile || persistedProfile.toLowerCase() === profileDir.toLowerCase()) {
+		try {
+			fs.unlinkSync(WINDOWS_PROFILE_PATH);
+		} catch {}
 	}
 }
 

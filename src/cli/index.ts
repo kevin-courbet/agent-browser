@@ -32,9 +32,9 @@ type ParsedOptions = {
 const HELP = `ab: WSL Chrome bridge for Vercel agent-browser
 
 Usage:
-  ab chrome [--url <url>] [--port <port>] [--chrome <path>] [--profile <dir>] [--native] [--print]
-  ab chrome-stop
-  ab chrome-args [--port <port>] [--profile <dir>] [--bind-all]
+  ab chrome [--url <url>] [--port <port>] [--chrome <path>] [--profile <dir>] [--proxy-pac-url <url>] [--native] [--print]
+  ab chrome-stop [--profile <dir>]
+  ab chrome-args [--port <port>] [--profile <dir>] [--proxy-pac-url <url>] [--bind-all]
   ab doctor
   ab <agent-browser command...>
 
@@ -65,7 +65,11 @@ async function main(): Promise<void> {
 	}
 
 	if (command === "chrome-stop") {
-		stopAgentChrome();
+		const opts = parseOptions(args.slice(1), new Set(["profile"]), new Set());
+		if (opts.positionals.length > 0) {
+			throw new Error(`unexpected chrome-stop argument: ${opts.positionals.join(" ")}`);
+		}
+		stopAgentChrome(opts.values.get("profile"));
 		process.stderr.write("chrome-stop: done\n");
 		return;
 	}
@@ -89,9 +93,9 @@ async function main(): Promise<void> {
 }
 
 async function handleChrome(args: string[]): Promise<void> {
-	const opts = parseOptions(args, new Set(["chrome", "port", "profile", "url"]), new Set(["native", "print"]));
+	const opts = parseOptions(args, new Set(["chrome", "port", "profile", "proxy-pac-url", "url"]), new Set(["native", "print"]));
 	if (opts.flags.has("help")) {
-		process.stdout.write("Usage: ab chrome [--url <url>] [--port <port>] [--chrome <path>] [--profile <dir>] [--native] [--print]\n");
+		process.stdout.write("Usage: ab chrome [--url <url>] [--port <port>] [--chrome <path>] [--profile <dir>] [--proxy-pac-url <url>] [--native] [--print]\n");
 		return;
 	}
 	if (opts.positionals.length > 0) {
@@ -106,6 +110,7 @@ async function handleChrome(args: string[]): Promise<void> {
 		chromePath: opts.values.get("chrome"),
 		port,
 		profileDir: opts.values.get("profile"),
+		proxyPacUrl: opts.values.get("proxy-pac-url"),
 		startUrl: url ?? "about:blank",
 		mode,
 	});
@@ -144,12 +149,13 @@ async function handleAttach(args: string[]): Promise<void> {
 }
 
 function handleChromeArgs(args: string[]): void {
-	const opts = parseOptions(args, new Set(["port", "profile"]), new Set(["bind-all"]));
+	const opts = parseOptions(args, new Set(["port", "profile", "proxy-pac-url"]), new Set(["bind-all"]));
 	const port = parsePort(opts.values.get("port") ?? String(defaultPort()));
 	const profileDir = opts.values.get("profile") ?? (looksLikeWsl() ? defaultWindowsProfileDir() : defaultLinuxProfileDir());
 	const chromeArgs = buildChromeArgs({
 		port,
 		profileDir,
+		proxyPacUrl: opts.values.get("proxy-pac-url"),
 		bindAll: opts.flags.has("bind-all"),
 	});
 	for (const arg of chromeArgs) process.stdout.write(`${arg}\n`);
